@@ -1,3 +1,17 @@
+// Handler to interrupt animation if a bulb is changed externally
+def onBulbStateChange(evt) {
+    if (state.auroraSuppressEvents) {
+        if (settings.enableDebugLogging) log.debug "Suppressed bulb event for ${evt.device.displayName} ${evt.name}: ${evt.value}"
+        state.auroraSuppressEvents = false
+        return
+    }
+    if (state.auroraActive) {
+        if (settings.enableDebugLogging) log.info "Bulb state changed externally (${evt.device.displayName} ${evt.name}: ${evt.value}), interrupting animation."
+        state.auroraActive = false
+        state.auroraStarted = false
+        restoreBulbStates()
+    }
+}
 /**
  *  Aurora Borealis Lighting
  *
@@ -66,6 +80,15 @@ def initialize() {
     if (startButtonDevice && startButtonAction && startButtonNumber) {
         subscribe(startButtonDevice, startButtonAction, onButtonEvent)
     }
+    // Subscribe to bulb state changes for interruption
+    if (colorBulbs) {
+        colorBulbs.each { bulb ->
+            subscribe(bulb, "switch", onBulbStateChange)
+            subscribe(bulb, "color", onBulbStateChange)
+            subscribe(bulb, "level", onBulbStateChange)
+            subscribe(bulb, "colorTemperature", onBulbStateChange)
+        }
+    }
     // Do not start/stop effect based on current switch state at initialization
     state.auroraActive = false
 }
@@ -75,11 +98,41 @@ def auroraLoop() {
     if (!colorBulbs) { if (settings.enableDebugLogging) log.debug "No color bulbs selected"; return }
     if (!state.auroraActive) { if (settings.enableDebugLogging) log.debug "Aurora not active"; return }
 
-    // Only capture bulb states at the very start of the animation
+
+    // Only capture bulb states at the very start of the animation, and only if restore is enabled
     if (!state.auroraStarted) {
-        if (settings.enableDebugLogging) log.debug "Capturing bulb states at animation start"
-        captureBulbStates()
+        if (state.auroraRestoreOnStop) {
+            if (settings.enableDebugLogging) log.debug "Capturing bulb states at animation start"
+            captureBulbStates()
+        }
         state.auroraStarted = true
+        state.auroraFirstStep = true
+    } else {
+        // Skip state check on the first step after capture
+        if (state.auroraFirstStep) {
+            state.auroraFirstStep = false
+        } else {
+            // Check if bulbs are still in expected state (only if restore is enabled)
+            if (state.auroraRestoreOnStop) {
+                def mismatch = false
+                colorBulbs.each { bulb ->
+                    def expected = state.savedBulbStates[bulb.id]
+                    if (!expected) return
+                    if (bulb.currentSwitch != "on") mismatch = true
+                    if (bulb.currentLevel != expected.level) mismatch = true
+                    if (bulb.currentHue != expected.hue) mismatch = true
+                    if (bulb.currentSaturation != expected.saturation) mismatch = true
+                    if (bulb.currentColorMode != expected.colorMode) mismatch = true
+                }
+                if (mismatch) {
+                    if (settings.enableDebugLogging) log.info "Bulb state mismatch detected, interrupting animation."
+                    state.auroraActive = false
+                    state.auroraStarted = false
+                    restoreBulbStates()
+                    return
+                }
+            }
+        }
     }
 
     def speedMs = (settings.speed ?: 3) * 1000
@@ -88,26 +141,46 @@ def auroraLoop() {
     def allColorBulbs = location.allDevices.findAll { it.hasCapability("ColorControl") }
     def unselectedBulbs = allColorBulbs - bulbs
     unselectedBulbs.each { it.off() }
-    // Create a harmonious base hue for this cycle (aurora colors: green-blue range)
-    def baseHue = 50 + new Random().nextInt(40) // Range 50-90 (green to cyan/blue)
-    def baseSaturation = 85 + new Random().nextInt(15) // Range 85-100
-    def randomOrder = bulbs.sort{new Random().nextInt()}
-    randomOrder.eachWithIndex { bulb, idx ->
-        // Create harmonious offset for each bulb (small variation from base)
-        def hueOffset = (idx % 3 - 1) * (5 + new Random().nextInt(5)) // -10 to +10 degree variation
+    // Prepare animation step state
+    if (!state.auroraStep) state.auroraStep = 0
+    def step = state.auroraStep as Integer
+    def randomOrder
+    if (!state.auroraOrder) {
+        randomOrder = bulbs.sort{new Random().nextInt()}
+        state.auroraOrder = randomOrder.collect{ it.id }
+    } else {
+        randomOrder = state.auroraOrder.collect { id -> bulbs.find{ it.id == id } }.findAll{ it }
+    }
+    // Only animate one bulb per step
+    if (step < randomOrder.size()) {
+        def bulb = randomOrder[step]
+        // Create harmonious base hue for this cycle (aurora colors: green-blue range)
+        if (!state.auroraBaseHue) state.auroraBaseHue = 50 + new Random().nextInt(40)
+        if (!state.auroraBaseSat) state.auroraBaseSat = 85 + new Random().nextInt(15)
+        def baseHue = state.auroraBaseHue
+        def baseSaturation = state.auroraBaseSat
+        def hueOffset = (step % 3 - 1) * (5 + new Random().nextInt(5))
         def harmonicHue = (baseHue + hueOffset) % 100
-        def harmonicSaturation = baseSaturation - new Random().nextInt(10) // Slight sat variation
+        def harmonicSaturation = baseSaturation - new Random().nextInt(10)
         def rawLevel = settings.auroraLevel ?: 100
         def level = Math.max(1, Math.min(100, rawLevel as Integer))
         if (settings.enableDebugLogging) log.debug "Setting ${bulb.displayName} to hue:${harmonicHue} sat:${harmonicSaturation} level:${level}"
         try {
+            state.auroraSuppressEvents = true
             bulb.setColor([hue: harmonicHue, saturation: harmonicSaturation, level: level])
         } catch (e) {
             if (settings.enableDebugLogging) log.warn "setColor failed for ${bulb.displayName}: ${e}"
         }
-        pauseExecution((speedMs / bulbs.size()).toInteger())
+        state.auroraStep = step + 1
+        runInMillis((speedMs / bulbs.size()).toInteger(), auroraLoop)
+    } else {
+        // Reset for next cycle
+        state.auroraStep = 0
+        state.auroraOrder = null
+        state.auroraBaseHue = null
+        state.auroraBaseSat = null
+        runIn(settings.speed ?: 3, auroraLoop)
     }
-    runIn(settings.speed ?: 3, auroraLoop)
 }	
 
 // Capture the state of all selected bulbs before starting the effect
@@ -165,13 +238,14 @@ def onSwitchOn(evt) {
     if (!state.auroraActive) {
         state.auroraActive = true
         state.auroraStarted = false
+        state.auroraRestoreOnStop = true
         runIn(2, auroraLoop)
     }
 }
 def onSwitchOff(evt) {
     state.auroraActive = false
     state.auroraStarted = false
-    restoreBulbStates()
+    if (state.auroraRestoreOnStop) restoreBulbStates()
 }
 
 // Button event handler (toggle)
@@ -204,6 +278,7 @@ def onButtonEvent(evt) {
         if (!state.auroraActive) {
             state.auroraActive = true
             state.auroraStarted = false
+            state.auroraRestoreOnStop = false
             runIn(2, auroraLoop)
         }
     }
