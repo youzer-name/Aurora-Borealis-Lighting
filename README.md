@@ -55,20 +55,26 @@ A Hubitat Elevation app that creates mesmerizing aurora borealis (northern light
 - Select a button device, button number, and button action that will stop the animation.
   - When starting and stopping using a button, there is no capture/restore done.
 
+### Assign a name
+- Optionally assign a unique name (i.e. "Aurora Borealis Lighting Family Room"),
+
+### Set for specific modes(s)
+- Optionally limit the modes in which the application can run,
+
 
 ### Color Palette
 
 The app randomly selects a base hue between 50 and 89 and saturation between 85 and 99 at the beginning of each cycle.
 
-- **Random Design**: The base color is randomly selected for the start of each cycle
+- **Random Design**: The base color is randomly selected for the start of each cycle,
 
 ### How Transitions Work
 
-1. The app picks a random base hue and saturation
-2. The app sets each bulb to a color similar to the base with a random offset
-3. The bulbs are set in a random order with the user-selected interval between each change
-4. After setting all bulbs, the animation holds that state for the user selected 'Then pause' interval
-5. The process repeats indefinitely in a loop
+1. The app picks a random base hue and saturation.
+2. The app sets each bulb to a color similar to the base with a random offset.
+3. The bulbs are set in a random order with the user-selected interval between each change.
+4. After setting all bulbs, the animation holds that state for the user selected 'Then pause' interval.
+5. The process repeats indefinitely in a loop until stopped.
 
 ## Usage Notes
 
