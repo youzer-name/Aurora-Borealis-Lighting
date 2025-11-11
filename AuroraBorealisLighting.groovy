@@ -132,6 +132,7 @@ void handleButtonEvent(evt, actionKey, numberKey, isStart) {
             if (state.auroraActive) {
                 state.auroraActive = false
                 state.auroraStarted = false
+                unsubscribeBulbEvents()
             }
         }
     }
@@ -371,6 +372,7 @@ def onSwitchOff(evt) {
     state.auroraActive = false
     state.auroraStarted = false
     if (state.auroraRestoreOnStop) restoreBulbStates()
+    unsubscribeBulbEvents()
 }
 
 private void suppressEventsFor(bulb, long ms = 1000) {
@@ -409,4 +411,16 @@ def onButtonEvent(evt) {
 
 def onStopButtonEvent(evt) {
     handleButtonEvent(evt, 'stopButtonAction', 'stopButtonNumber', false)
+}
+
+// Unsubscribe only from bulb event subscriptions, not triggers
+private void unsubscribeBulbEvents() {
+    if (colorBulbs) {
+        colorBulbs.each { bulb ->
+            unsubscribe(bulb, "switch")
+            unsubscribe(bulb, "color")
+            unsubscribe(bulb, "level")
+            unsubscribe(bulb, "colorTemperature")
+        }
+    }
 }
