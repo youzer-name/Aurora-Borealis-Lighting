@@ -139,12 +139,9 @@ def onBulbStateChange(evt) {
         if (settings.enableDebugLogging) log.debug "Suppressing abort during first cycle for ${evt.device.displayName} ${evt.name}: ${evt.value}"
         return
     }
-    if (state.auroraActive) {
-        if (settings.enableDebugLogging) log.info "Bulb state changed externally (${evt.device.displayName} ${evt.name}: ${evt.value}), interrupting animation."
-        state.auroraActive = false
-        state.auroraStarted = false
-        restoreBulbStates()
-    }
+    // Ignore all other events (including level/saturation changes)
+    if (settings.enableDebugLogging) log.debug "Ignoring non-abort event for ${evt.device.displayName} ${evt.name}: ${evt.value}"
+    return
 }
 
 def auroraLoop() {
