@@ -106,36 +106,6 @@ def auroraLoop() {
             captureBulbStates()
         }
         state.auroraStarted = true
-        state.auroraSkipStateCheck = true // skip state check for first full cycle
-    } else {
-        // Skip state check for the entire first animation cycle
-        if (state.auroraSkipStateCheck) {
-            // Only clear after a full cycle (when step resets to 0)
-            if (state.auroraStep == 0) {
-                state.auroraSkipStateCheck = false
-            }
-        } else {
-            // Check if bulbs are still in expected state (only if restore is enabled)
-            if (state.auroraRestoreOnStop) {
-                def mismatch = false
-                colorBulbs.each { bulb ->
-                    def expected = state.savedBulbStates[bulb.id]
-                    if (!expected) return
-                    if (bulb.currentSwitch != "on") mismatch = true
-                    if (bulb.currentLevel != expected.level) mismatch = true
-                    if (bulb.currentHue != expected.hue) mismatch = true
-                    if (bulb.currentSaturation != expected.saturation) mismatch = true
-                    if (bulb.currentColorMode != expected.colorMode) mismatch = true
-                }
-                if (mismatch) {
-                    if (settings.enableDebugLogging) log.info "Bulb state mismatch detected, interrupting animation."
-                    state.auroraActive = false
-                    state.auroraStarted = false
-                    restoreBulbStates()
-                    return
-                }
-            }
-        }
     }
 
     def speedMs = (settings.speed ?: 3) * 1000
