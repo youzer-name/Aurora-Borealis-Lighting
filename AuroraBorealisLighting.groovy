@@ -52,6 +52,40 @@ preferences {
     }
 }
 
+def installed() {
+    initialize()
+}
+
+def updated() {
+    unschedule()
+    unsubscribe()
+    initialize()
+}
+
+def initialize() {
+    // Subscribe to switch and button events if selected
+    if (controlSwitch) {
+        subscribe(controlSwitch, "switch.on", onSwitchOn)
+        subscribe(controlSwitch, "switch.off", onSwitchOff)
+    }
+    if (startButtonDevice && startButtonAction && startButtonNumber) {
+        subscribe(startButtonDevice, startButtonAction, onButtonEvent)
+    }
+    // Subscribe to bulb state changes for interruption
+    if (colorBulbs) {
+        colorBulbs.each { bulb ->
+            subscribe(bulb, "switch", onBulbStateChange)
+            subscribe(bulb, "color", onBulbStateChange)
+            subscribe(bulb, "level", onBulbStateChange)
+            subscribe(bulb, "colorTemperature", onBulbStateChange)
+}
+    }
+    // Do not start/stop effect based on current switch state at initialization
+    state.auroraActive = false
+        state.auroraFirstCyclePrime = true
+}
+
+
 // Handler to interrupt animation if a bulb is changed externally
 def onBulbStateChange(evt) {
     def suppressMap = state.auroraSuppressEventsUntil ?: [:]
@@ -113,76 +147,6 @@ def onBulbStateChange(evt) {
     }
 }
 
-
-definition(
-    name: "Aurora Borealis Lighting",
-    namespace: "custom",
-    author: "Colin Ho",
-    description: "Simulates Northern Lights by cycling colors on selected color bulbs.",
-    category: "Lighting",
-    iconUrl: "",
-    iconX2Url: "",
-    iconX3Url: "")
-
-preferences {
-    section("Logging") {
-        input "enableDebugLogging", "bool", title: "Enable debug logging?", defaultValue: false, required: false
-    }
-    section("Select color bulbs for aurora effect") {
-        input "colorBulbs", "capability.colorControl", title: "Color Bulbs", multiple: true, required: true
-    }
-    section("") {
-        input "bulbInterval", "number", title: "Set a bulb every (seconds)", required: true, defaultValue: 3
-    }
-    section("") {
-        input "cyclePause", "number", title: "Then pause (seconds)", required: true, defaultValue: 3
-    }
-    section("") {
-        input "auroraLevel", "number", title: "Aurora Effect Brightness", required: true, defaultValue: 100, range: "1..100"
-    }
-    section("Start/Stop Control (Switch)") {
-        input "controlSwitch", "capability.switch", title: "Switch to Start/Stop Effect (optional)", required: false, multiple: false
-    }
-    section("Start Control (Button)") {
-        input "startButtonDevice", "capability.pushableButton", title: "Button Device to Start Effect (optional)", required: false, multiple: false
-        input "startButtonNumber", "number", title: "Button Number", required: false, defaultValue: 1
-        input "startButtonAction", "enum", title: "Button Action", options: ["pushed", "held", "doubleTapped"], required: false, defaultValue: "pushed"
-    }
-}
-
-def installed() {
-    initialize()
-}
-
-def updated() {
-    unschedule()
-    unsubscribe()
-    initialize()
-}
-
-def initialize() {
-    // Subscribe to switch and button events if selected
-    if (controlSwitch) {
-        subscribe(controlSwitch, "switch.on", onSwitchOn)
-        subscribe(controlSwitch, "switch.off", onSwitchOff)
-    }
-    if (startButtonDevice && startButtonAction && startButtonNumber) {
-        subscribe(startButtonDevice, startButtonAction, onButtonEvent)
-    }
-    // Subscribe to bulb state changes for interruption
-    if (colorBulbs) {
-        colorBulbs.each { bulb ->
-            subscribe(bulb, "switch", onBulbStateChange)
-            subscribe(bulb, "color", onBulbStateChange)
-            subscribe(bulb, "level", onBulbStateChange)
-            subscribe(bulb, "colorTemperature", onBulbStateChange)
-        }
-    }
-    // Do not start/stop effect based on current switch state at initialization
-    state.auroraActive = false
-        state.auroraFirstCyclePrime = true
-}
-
 def auroraLoop() {
 
     if (settings.enableDebugLogging) log.debug "auroraLoop called: colorBulbs=${colorBulbs}, state.auroraActive=${state.auroraActive}"
@@ -234,13 +198,9 @@ def auroraLoop() {
             bulbs.each { bulb ->
                 if (settings.enableDebugLogging) log.debug "Priming ${bulb.displayName} to base hue:${baseHue} sat:${baseSaturation} level:${level}"
                 try {
-                    def suppressMap = state.auroraSuppressEventsUntil ?: [:]
-                    suppressMap[bulb.id] = now() + 1000 // suppress for 1 second for this bulb
-                    state.auroraSuppressEventsUntil = suppressMap
+                    suppressEventsFor(bulb)
                     // Track last commanded hue
-                    def lastHueMap = state.auroraLastHue ?: [:]
-                    lastHueMap[bulb.id] = baseHue as Double
-                    state.auroraLastHue = lastHueMap
+                    setLastHue(bulb, baseHue as Double)
                     bulb.setColor([hue: baseHue, saturation: baseSaturation, level: level])
                 } catch (e) {
                     if (settings.enableDebugLogging) log.warn "setColor failed for ${bulb.displayName}: ${e}"
@@ -262,13 +222,9 @@ def auroraLoop() {
         def level = Math.max(1, Math.min(100, rawLevel as Integer))
         if (settings.enableDebugLogging) log.debug "Setting ${bulb.displayName} to hue:${harmonicHue} sat:${harmonicSaturation} level:${level}"
         try {
-            def suppressMap = state.auroraSuppressEventsUntil ?: [:]
-            suppressMap[bulb.id] = now() + 1000 // suppress for 1 second for this bulb
-            state.auroraSuppressEventsUntil = suppressMap
+            suppressEventsFor(bulb)
             // Track last commanded hue
-            def lastHueMap = state.auroraLastHue ?: [:]
-            lastHueMap[bulb.id] = harmonicHue as Double
-            state.auroraLastHue = lastHueMap
+            setLastHue(bulb, harmonicHue as Double)
             bulb.setColor([hue: harmonicHue, saturation: harmonicSaturation, level: level])
         } catch (e) {
             if (settings.enableDebugLogging) log.warn "setColor failed for ${bulb.displayName}: ${e}"
@@ -322,46 +278,29 @@ def restoreBulbStates() {
         if (prev) {
             try {
                 if (prev.switch == "off") {
-                    if (settings.enableDebugLogging) log.debug "Restoring ${bulb.displayName} to OFF"
-                    def suppressMap = state.auroraSuppressEventsUntil ?: [:]
-                    suppressMap[bulb.id] = now() + 1000 // suppress for 1 second for this bulb
-                    state.auroraSuppressEventsUntil = suppressMap
+                    suppressEventsFor(bulb)
                     // Remove last commanded hue for this bulb
-                    def lastHueMap = state.auroraLastHue ?: [:]
-                    lastHueMap.remove(bulb.id)
-                    state.auroraLastHue = lastHueMap
+                    clearLastHue(bulb)
                     bulb.off()
                 } else {
                     if (settings.enableDebugLogging) log.debug "Restoring ${bulb.displayName} to hue:${prev.hue} sat:${prev.saturation} level:${prev.level} mode:${prev.colorMode}"
                     if (prev.colorMode == "CT" && bulb.hasCommand("setColorTemperature")) {
                         // If previous mode was CT, restore with setColorTemperature and level
                         def ct = bulb.currentColorTemperature ?: 4000
-                        def suppressMap = state.auroraSuppressEventsUntil ?: [:]
-                        suppressMap[bulb.id] = now() + 1000 // suppress for 1 second for this bulb
-                        state.auroraSuppressEventsUntil = suppressMap
+                        suppressEventsFor(bulb)
                         // Remove last commanded hue for this bulb
-                        def lastHueMap = state.auroraLastHue ?: [:]
-                        lastHueMap.remove(bulb.id)
-                        state.auroraLastHue = lastHueMap
+                        clearLastHue(bulb)
                         bulb.setColorTemperature(ct)
                         bulb.setLevel(prev.level)
                     } else if (prev.colorMode == "RGB" || prev.colorMode == "CT") {
-                        def suppressMap = state.auroraSuppressEventsUntil ?: [:]
-                        suppressMap[bulb.id] = now() + 1000 // suppress for 1 second for this bulb
-                        state.auroraSuppressEventsUntil = suppressMap
+                        suppressEventsFor(bulb)
                         // Track last commanded hue for this bulb
-                        def lastHueMap = state.auroraLastHue ?: [:]
-                        lastHueMap[bulb.id] = prev.hue as Double
-                        state.auroraLastHue = lastHueMap
+                        setLastHue(bulb, prev.hue as Double)
                         bulb.setColor([hue: prev.hue, saturation: prev.saturation, level: prev.level])
                     } else {
-                        def suppressMap = state.auroraSuppressEventsUntil ?: [:]
-                        suppressMap[bulb.id] = now() + 1000 // suppress for 1 second for this bulb
-                        state.auroraSuppressEventsUntil = suppressMap
+                        suppressEventsFor(bulb)
                         // Remove last commanded hue for this bulb
-                        def lastHueMap = state.auroraLastHue ?: [:]
-                        lastHueMap.remove(bulb.id)
-                        state.auroraLastHue = lastHueMap
+                        clearLastHue(bulb)
                         bulb.setLevel(prev.level)
                     }
                 }
@@ -386,6 +325,24 @@ def onSwitchOff(evt) {
     state.auroraActive = false
     state.auroraStarted = false
     if (state.auroraRestoreOnStop) restoreBulbStates()
+}
+
+private void suppressEventsFor(bulb, long ms = 1000) {
+    def map = state.auroraSuppressEventsUntil ?: [:]
+    map[bulb.id] = now() + ms
+    state.auroraSuppressEventsUntil = map
+}
+
+private void setLastHue(bulb, double hue) {
+    def map = state.auroraLastHue ?: [:]
+    map[bulb.id] = hue
+    state.auroraLastHue = map
+}
+
+private void clearLastHue(bulb) {
+    def map = state.auroraLastHue ?: [:]   // grab the map (or an empty one)
+    map.remove(bulb.id)                    // drop the entry for this bulb
+    state.auroraLastHue = map              // write it back
 }
 
 // Button event handler (toggle)
