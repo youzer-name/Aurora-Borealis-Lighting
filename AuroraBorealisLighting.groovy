@@ -106,11 +106,14 @@ def auroraLoop() {
             captureBulbStates()
         }
         state.auroraStarted = true
-        state.auroraFirstStep = true
+        state.auroraSkipStateCheck = true // skip state check for first full cycle
     } else {
-        // Skip state check on the first step after capture
-        if (state.auroraFirstStep) {
-            state.auroraFirstStep = false
+        // Skip state check for the entire first animation cycle
+        if (state.auroraSkipStateCheck) {
+            // Only clear after a full cycle (when step resets to 0)
+            if (state.auroraStep == 0) {
+                state.auroraSkipStateCheck = false
+            }
         } else {
             // Check if bulbs are still in expected state (only if restore is enabled)
             if (state.auroraRestoreOnStop) {
