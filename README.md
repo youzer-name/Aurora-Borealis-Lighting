@@ -1,16 +1,6 @@
 # Aurora Borealis Lighting
 
-A Hubitat Elevation app that creates mesmerizing aurora borealis (northern lights) effects by cycling your color-capable smart lights through a carefully curated palette of harmonious colors with smooth transitions.
-
-## Features
-
-- **Harmonious Color Palette**: Cycles through 10 carefully selected colors inspired by the natural aurora borealis, including blues, greens, teals, purples, and subtle pinks
-- **Smooth Transitions**: Configurable transition times create seamless color changes that mimic the gentle flowing of northern lights
-- **Adjustable Timing**: Customize both transition duration and color hold time to match your preferences
-- **Brightness Control**: Set a consistent brightness level across all lights
-- **Optional Switch Control**: Enable or disable the effect using any smart switch
-- **Multi-Light Support**: Control multiple color-capable lights simultaneously for a coordinated display
-- **Automatic Cycling**: Continuously loops through the color palette without manual intervention
+A Hubitat Elevation app that creates mesmerizing aurora borealis (northern lights) effects by cycling your color-capable smart lights through a selected range of hues with configurable transition timing.
 
 ## Requirements
 
