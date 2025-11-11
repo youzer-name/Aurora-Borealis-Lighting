@@ -14,7 +14,7 @@
  *
  */
 
-
+import groovy.json.JsonSlurper
 
 definition(
     name: "Aurora Borealis Lighting",
@@ -50,6 +50,11 @@ preferences {
         input "startButtonNumber", "number", title: "Button Number", required: false, defaultValue: 1
         input "startButtonAction", "enum", title: "Button Action", options: ["pushed", "held", "doubleTapped"], required: false, defaultValue: "pushed"
     }
+    section("Stop Control (Button)") {
+        input "stopButtonDevice", "capability.pushableButton", title: "Button Device to Stop Effect (optional)", required: false, multiple: false
+        input "stopButtonNumber", "number", title: "Button Number", required: false, defaultValue: 1
+        input "stopButtonAction", "enum", title: "Button Action", options: ["pushed", "held", "doubleTapped"], required: false, defaultValue: "pushed"
+    }
 }
 
 def installed() {
@@ -71,6 +76,10 @@ def initialize() {
     if (startButtonDevice && startButtonAction && startButtonNumber) {
         subscribe(startButtonDevice, startButtonAction, onButtonEvent)
     }
+    if (stopButtonDevice && stopButtonAction && stopButtonNumber) {
+        subscribe(stopButtonDevice, stopButtonAction, onStopButtonEvent)
+    }
+
     // Subscribe to bulb state changes for interruption
     if (colorBulbs) {
         colorBulbs.each { bulb ->
@@ -78,11 +87,54 @@ def initialize() {
             subscribe(bulb, "color", onBulbStateChange)
             subscribe(bulb, "level", onBulbStateChange)
             subscribe(bulb, "colorTemperature", onBulbStateChange)
-}
+        }
     }
     // Do not start/stop effect based on current switch state at initialization
     state.auroraActive = false
-        state.auroraFirstCyclePrime = true
+    state.auroraFirstCyclePrime = true
+}
+
+// Shared helper for button event handling (start/stop)
+void handleButtonEvent(evt, actionKey, numberKey, isStart) {
+    def action = settings["${actionKey}"] ?: "pushed"
+    def btnNum = (settings["${numberKey}"] ?: 1) as Integer
+    debugLog "Button event received: name=${evt.name}, value=${evt.value}, data=${evt.data}, device=${evt.device}, action=${action}, btnNum=${btnNum}"
+    def eventAction = evt.name
+    def eventBtnNum = null
+    try {
+        if (evt.value) {
+            eventBtnNum = evt.value as Integer
+            debugLog "Parsed buttonNumber from evt.value: ${eventBtnNum}"
+        } else if (evt.data) {
+            def json = groovy.json.JsonSlurper.newInstance().parseText(evt.data)
+            eventBtnNum = json.buttonNumber as Integer
+            debugLog "Parsed buttonNumber from evt.data: ${eventBtnNum}"
+        } else {
+            eventBtnNum = 1 // fallback for single-button
+            debugLog "Fallback to buttonNumber 1"
+        }
+    } catch (e) {
+        eventBtnNum = 1
+        debugLog "Exception parsing button number: ${e}"
+    }
+    if (settings.enableDebugLogging) log.debug "Comparing eventAction=${eventAction} to action=${action}, eventBtnNum=${eventBtnNum} to btnNum=${btnNum}"
+    if (eventAction == action && eventBtnNum == btnNum) {
+        if (isStart) {
+            debugLog "Button event matched, starting animation."
+            if (!state.auroraActive) {
+                state.auroraActive = true
+                state.auroraStarted = false
+                state.auroraRestoreOnStop = false
+                runIn(2, auroraLoop)
+            }
+        } else {
+            debugLog "Stop button event matched, stopping animation."
+            if (state.auroraActive) {
+                state.auroraActive = false
+                state.auroraStarted = false
+            }
+        }
+    }
 }
 
 
@@ -91,14 +143,14 @@ def onBulbStateChange(evt) {
     def suppressMap = state.auroraSuppressEventsUntil ?: [:]
     def bulbId = evt.device?.id
     if (bulbId && suppressMap[bulbId] && now() < suppressMap[bulbId]) {
-        if (settings.enableDebugLogging) log.debug "Suppressed bulb event for ${evt.device.displayName} ${evt.name}: ${evt.value} (within suppression window for this bulb)"
+        debugLog "Suppressed bulb event for ${evt.device.displayName} ${evt.name}: ${evt.value} (within suppression window for this bulb)"
         return
     }
     // Only track last commanded hue per bulb
     def lastHueMap = state.auroraLastHue ?: [:]
     // If bulb is turned off, abort
     if (evt.name == 'switch' && evt.value == 'off') {
-        if (settings.enableDebugLogging) log.info "Bulb turned off externally (${evt.device.displayName}), aborting."
+        debugLog "Bulb turned off externally (${evt.device.displayName}), aborting."
         if (state.auroraActive) {
             state.auroraActive = false
             state.auroraStarted = false
@@ -108,12 +160,12 @@ def onBulbStateChange(evt) {
     }
     // Do NOT abort on 'switch on' events
     if (evt.name == 'switch' && evt.value == 'on') {
-        if (settings.enableDebugLogging) log.debug "Ignoring 'switch on' event for ${evt.device.displayName}"
+        debugLog "Ignoring 'switch on' event for ${evt.device.displayName}"
         return
     }
     // If bulb is set to color temperature mode, abort
     if (evt.name == 'colorMode' && evt.value == 'CT') {
-        if (settings.enableDebugLogging) log.info "Bulb set to CT mode externally (${evt.device.displayName}), aborting."
+        debugLog "Bulb set to CT mode externally (${evt.device.displayName}), aborting."
         if (state.auroraActive) {
             state.auroraActive = false
             state.auroraStarted = false
@@ -126,7 +178,7 @@ def onBulbStateChange(evt) {
         def lastHue = lastHueMap[bulbId]
         def newHue = evt.value as Double
         if (lastHue != null && Math.abs(newHue - lastHue) > 5) {
-            if (settings.enableDebugLogging) log.info "Bulb hue changed externally (${evt.device.displayName} hue: ${evt.value}), aborting."
+            debugLog "Bulb hue changed externally (${evt.device.displayName} hue: ${evt.value}), aborting."
             if (state.auroraActive) {
                 state.auroraActive = false
                 state.auroraStarted = false
@@ -136,25 +188,25 @@ def onBulbStateChange(evt) {
         }
     }
     if (state.auroraSuppressAbort) {
-        if (settings.enableDebugLogging) log.debug "Suppressing abort during first cycle for ${evt.device.displayName} ${evt.name}: ${evt.value}"
+        debugLog "Suppressing abort during first cycle for ${evt.device.displayName} ${evt.name}: ${evt.value}"
         return
     }
     // Ignore all other events (including level/saturation changes)
-    if (settings.enableDebugLogging) log.debug "Ignoring non-abort event for ${evt.device.displayName} ${evt.name}: ${evt.value}"
+    debugLog "Ignoring non-abort event for ${evt.device.displayName} ${evt.name}: ${evt.value}"
     return
 }
 
 def auroraLoop() {
 
-    if (settings.enableDebugLogging) log.debug "auroraLoop called: colorBulbs=${colorBulbs}, state.auroraActive=${state.auroraActive}"
-    if (!colorBulbs) { if (settings.enableDebugLogging) log.debug "No color bulbs selected"; return }
-    if (!state.auroraActive) { if (settings.enableDebugLogging) log.debug "Aurora not active"; return }
+    debugLog "auroraLoop called: colorBulbs=${colorBulbs}, state.auroraActive=${state.auroraActive}"
+    if (!colorBulbs) { debugLog "No color bulbs selected"; return }
+    if (!state.auroraActive) { debugLog "Aurora not active"; return }
 
 
     // Only capture bulb states at the very start of the animation, and only if restore is enabled
     if (!state.auroraStarted) {
         if (state.auroraRestoreOnStop) {
-            if (settings.enableDebugLogging) log.debug "Capturing bulb states at animation start"
+            debugLog "Capturing bulb states at animation start"
             captureBulbStates()
         }
         state.auroraStarted = true
@@ -193,14 +245,14 @@ def auroraLoop() {
         // Only prime all bulbs on the very first cycle
         if (state.auroraStarted && state.auroraFirstCyclePrime != false) {
             bulbs.each { bulb ->
-                if (settings.enableDebugLogging) log.debug "Priming ${bulb.displayName} to base hue:${baseHue} sat:${baseSaturation} level:${level}"
+                debugLog "Priming ${bulb.displayName} to base hue:${baseHue} sat:${baseSaturation} level:${level}"
                 try {
                     suppressEventsFor(bulb)
                     // Track last commanded hue
                     setLastHue(bulb, baseHue as Double)
                     bulb.setColor([hue: baseHue, saturation: baseSaturation, level: level])
                 } catch (e) {
-                    if (settings.enableDebugLogging) log.warn "setColor failed for ${bulb.displayName}: ${e}"
+                    debugLog "setColor failed for ${bulb.displayName}: ${e}"
                 }
             }
             state.auroraFirstCyclePrime = false
@@ -217,14 +269,14 @@ def auroraLoop() {
         def harmonicSaturation = baseSaturation - new Random().nextInt(10)
         def rawLevel = settings.auroraLevel ?: 100
         def level = Math.max(1, Math.min(100, rawLevel as Integer))
-        if (settings.enableDebugLogging) log.debug "Setting ${bulb.displayName} to hue:${harmonicHue} sat:${harmonicSaturation} level:${level}"
+        debugLog "Setting ${bulb.displayName} to hue:${harmonicHue} sat:${harmonicSaturation} level:${level}"
         try {
             suppressEventsFor(bulb)
             // Track last commanded hue
             setLastHue(bulb, harmonicHue as Double)
             bulb.setColor([hue: harmonicHue, saturation: harmonicSaturation, level: level])
         } catch (e) {
-            if (settings.enableDebugLogging) log.warn "setColor failed for ${bulb.displayName}: ${e}"
+            debugLog "setColor failed for ${bulb.displayName}: ${e}"
         }
         state.auroraStep = step + 1
         runInMillis(bulbIntervalMs, auroraLoop)
@@ -234,10 +286,7 @@ def auroraLoop() {
             // Only after first cycle: schedule suppression clear after pause
             runIn(Math.round(cyclePauseSec) as int, clearAuroraSuppressAbort)
         }
-    state.auroraStep = 0
-    state.auroraOrder = null
-    state.auroraBaseHue = null
-    state.auroraBaseSat = null
+    resetCycleState()
     runIn(Math.round(cyclePauseSec) as int, auroraLoop)
     }
 }
@@ -245,7 +294,7 @@ def auroraLoop() {
 // Helper to clear abort suppression after pause
 def clearAuroraSuppressAbort() {
     state.auroraSuppressAbort = false
-    if (settings.enableDebugLogging) log.debug "Abort suppression cleared after first cycle pause."
+    debugLog "Abort suppression cleared after first cycle pause."
 }
 
 // Capture the state of all selected bulbs before starting the effect
@@ -262,7 +311,7 @@ def captureBulbStates() {
             ]
             state.savedBulbStates[bulb.id] = bulbState
         } catch (e) {
-            if (settings.enableDebugLogging) log.warn "Could not capture state for ${bulb.displayName}: ${e}"
+            debugLog "Could not capture state for ${bulb.displayName}: ${e}"
         }
     }
 }
@@ -280,7 +329,7 @@ def restoreBulbStates() {
                     clearLastHue(bulb)
                     bulb.off()
                 } else {
-                    if (settings.enableDebugLogging) log.debug "Restoring ${bulb.displayName} to hue:${prev.hue} sat:${prev.saturation} level:${prev.level} mode:${prev.colorMode}"
+                    debugLog "Restoring ${bulb.displayName} to hue:${prev.hue} sat:${prev.saturation} level:${prev.level} mode:${prev.colorMode}"
                     if (prev.colorMode == "CT" && bulb.hasCommand("setColorTemperature")) {
                         // If previous mode was CT, restore with setColorTemperature and level
                         def ct = bulb.currentColorTemperature ?: 4000
@@ -302,7 +351,7 @@ def restoreBulbStates() {
                     }
                 }
             } catch (e) {
-                if (settings.enableDebugLogging) log.warn "Could not restore state for ${bulb.displayName}: ${e}"
+                debugLog "Could not restore state for ${bulb.displayName}: ${e}"
             }
         }
     }
@@ -342,38 +391,22 @@ private void clearLastHue(bulb) {
     state.auroraLastHue = map              // write it back
 }
 
-// Button event handler (toggle)
+private void debugLog(String msg) {
+    if (settings.enableDebugLogging) log.debug(msg)
+}
+
+private void resetCycleState() {
+    state.auroraStep = 0
+    state.auroraOrder = null
+    state.auroraBaseHue = null
+    state.auroraBaseSat = null
+}
+
 // Button event handler (start only, with button number check)
 def onButtonEvent(evt) {
-    def action = settings.startButtonAction ?: "pushed"
-    def btnNum = (settings.startButtonNumber ?: 1) as Integer
-    if (settings.enableDebugLogging) log.debug "Button event received: name=${evt.name}, value=${evt.value}, data=${evt.data}, device=${evt.device}, action=${action}, btnNum=${btnNum}"
-    def eventAction = evt.name
-    def eventBtnNum = null
-    try {
-        if (evt.value) {
-            eventBtnNum = evt.value as Integer
-            if (settings.enableDebugLogging) log.debug "Parsed buttonNumber from evt.value: ${eventBtnNum}"
-        } else if (evt.data) {
-            def json = groovy.json.JsonSlurper.newInstance().parseText(evt.data)
-            eventBtnNum = json.buttonNumber as Integer
-            if (settings.enableDebugLogging) log.debug "Parsed buttonNumber from evt.data: ${eventBtnNum}"
-        } else {
-            eventBtnNum = 1 // fallback for single-button
-            if (settings.enableDebugLogging) log.debug "Fallback to buttonNumber 1"
-        }
-    } catch (e) {
-        eventBtnNum = 1
-        if (settings.enableDebugLogging) log.warn "Exception parsing button number: ${e}"
-    }
-    if (settings.enableDebugLogging) log.debug "Comparing eventAction=${eventAction} to action=${action}, eventBtnNum=${eventBtnNum} to btnNum=${btnNum}"
-    if (eventAction == action && eventBtnNum == btnNum) {
-        if (settings.enableDebugLogging) log.debug "Button event matched, starting animation."
-        if (!state.auroraActive) {
-            state.auroraActive = true
-            state.auroraStarted = false
-            state.auroraRestoreOnStop = false
-            runIn(2, auroraLoop)
-        }
-    }
+    handleButtonEvent(evt, 'startButtonAction', 'startButtonNumber', true)
+}
+
+def onStopButtonEvent(evt) {
+    handleButtonEvent(evt, 'stopButtonAction', 'stopButtonNumber', false)
 }
