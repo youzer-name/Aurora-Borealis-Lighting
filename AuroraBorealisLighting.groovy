@@ -130,9 +130,7 @@ void handleButtonEvent(evt, actionKey, numberKey, isStart) {
         } else {
             debugLog "Stop button event matched, stopping animation."
             if (state.auroraActive) {
-                state.auroraActive = false
-                state.auroraStarted = false
-                unsubscribeBulbEvents()
+                stopAll()
             }
         }
     }
@@ -152,11 +150,7 @@ def onBulbStateChange(evt) {
     // If bulb is turned off, abort
     if (evt.name == 'switch' && evt.value == 'off') {
         debugLog "Bulb turned off externally (${evt.device.displayName}), aborting."
-        if (state.auroraActive) {
-            state.auroraActive = false
-            state.auroraStarted = false
-            restoreBulbStates()
-        }
+        stopAll()
         return
     }
     // Do NOT abort on 'switch on' events
@@ -167,11 +161,7 @@ def onBulbStateChange(evt) {
     // If bulb is set to color temperature mode, abort
     if (evt.name == 'colorMode' && evt.value == 'CT') {
         debugLog "Bulb set to CT mode externally (${evt.device.displayName}), aborting."
-        if (state.auroraActive) {
-            state.auroraActive = false
-            state.auroraStarted = false
-            restoreBulbStates()
-        }
+        stopAll()
         return
     }
     // If hue changes significantly, abort
@@ -180,11 +170,7 @@ def onBulbStateChange(evt) {
         def newHue = evt.value as Double
         if (lastHue != null && Math.abs(newHue - lastHue) > 5) {
             debugLog "Bulb hue changed externally (${evt.device.displayName} hue: ${evt.value}), aborting."
-            if (state.auroraActive) {
-                state.auroraActive = false
-                state.auroraStarted = false
-                restoreBulbStates()
-            }
+            stopAll()
             return
         }
     }
@@ -369,10 +355,7 @@ def onSwitchOn(evt) {
     }
 }
 def onSwitchOff(evt) {
-    state.auroraActive = false
-    state.auroraStarted = false
-    if (state.auroraRestoreOnStop) restoreBulbStates()
-    unsubscribeBulbEvents()
+    stopAll()
 }
 
 private void suppressEventsFor(bulb, long ms = 1000) {
@@ -422,5 +405,14 @@ private void unsubscribeBulbEvents() {
             unsubscribe(bulb, "level")
             unsubscribe(bulb, "colorTemperature")
         }
+    }
+}
+
+private void stopAll() {
+    if (state.auroraActive) {
+        state.auroraActive = false
+        state.auroraStarted = false
+        if (state.auroraRestoreOnStop) restoreBulbStates()
+        unsubscribeBulbEvents()
     }
 }
