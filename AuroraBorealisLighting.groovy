@@ -67,6 +67,11 @@ def updated() {
     initialize()
 }
 
+def uninstalled() {
+    unschedule()
+    unsubscribe()
+}
+
 def initialize() {
     // Subscribe to switch and button events if selected
     if (controlSwitch) {
@@ -85,7 +90,6 @@ def initialize() {
         colorBulbs.each { bulb ->
             subscribe(bulb, "switch", onBulbStateChange)
             subscribe(bulb, "color", onBulbStateChange)
-            subscribe(bulb, "level", onBulbStateChange)
             subscribe(bulb, "colorTemperature", onBulbStateChange)
         }
     }
@@ -178,7 +182,7 @@ def onBulbStateChange(evt) {
         debugLog "Suppressing abort during first cycle for ${evt.device.displayName} ${evt.name}: ${evt.value}"
         return
     }
-    // Ignore all other events (including level/saturation changes)
+    // Ignore all other events
     debugLog "Ignoring non-abort event for ${evt.device.displayName} ${evt.name}: ${evt.value}"
     return
 }
@@ -348,6 +352,7 @@ def restoreBulbStates() {
 // Switch event handlers
 def onSwitchOn(evt) {
     if (!state.auroraActive) {
+        initialize()
         state.auroraActive = true
         state.auroraStarted = false
         state.auroraRestoreOnStop = true
@@ -402,7 +407,6 @@ private void unsubscribeBulbEvents() {
         colorBulbs.each { bulb ->
             unsubscribe(bulb, "switch")
             unsubscribe(bulb, "color")
-            unsubscribe(bulb, "level")
             unsubscribe(bulb, "colorTemperature")
         }
     }
